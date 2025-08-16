@@ -21,10 +21,3 @@ EXPOSE 8080
 
 # Set entrypoint
 ENTRYPOINT ["./App"]
-
-// .dockerignore
-.build/
-.swiftpm/
-*.xcodeproj
-DerivedData/
-.DS_Store
