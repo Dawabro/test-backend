@@ -28,8 +28,7 @@ let package = Package(
             dependencies: [
                 .target(name: "App"),
                 .product(name: "XCTVapor", package: "vapor"),
-            ],
-            path: "Tests/AppTests"
+            ]
         )
     ]
 )
