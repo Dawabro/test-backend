@@ -1,14 +1,7 @@
+import Fluent
 import Vapor
 
-final class MessageStorage {
-    var lastMessage: String = "No messages yet"
-    var timestamp: Date = Date()
-}
-
 func routes(_ app: Application) throws {
-    // Create a shared storage instance
-    let storage = MessageStorage()
-    
     // Original endpoints
     app.get("hello") { req async -> String in
         return "Hello World!"
@@ -22,19 +15,20 @@ func routes(_ app: Application) throws {
         return ["message": "Hello World!", "status": "success"]
     }
     
-    // NEW: Structure for receiving POST data
+    // Structure for receiving POST data
     struct MessageRequest: Content {
         let message: String
     }
     
-    // NEW: Structure for message response
+    // Structure for message response
     struct MessageResponse: Content {
+        let id: UUID?
         let message: String
         let timestamp: String
         let status: String
     }
     
-    // NEW: POST endpoint to receive a message
+    // POST endpoint to save a message to database
     app.post("message") { req async throws -> MessageResponse in
         // Decode the JSON body
         let messageRequest = try req.content.decode(MessageRequest.self)
@@ -44,44 +38,122 @@ func routes(_ app: Application) throws {
             throw Abort(.badRequest, reason: "Message cannot be empty")
         }
         
-        // Store the message
-        storage.lastMessage = messageRequest.message
-        storage.timestamp = Date()
+        // Create new message in database
+        let message = Message(content: messageRequest.message)
+        try await message.save(on: req.db)
         
-        // Return confirmation
+        // Format timestamp
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         formatter.timeZone = TimeZone(abbreviation: "UTC")
         
         return MessageResponse(
-            message: messageRequest.message,
-            timestamp: formatter.string(from: storage.timestamp),
+            id: message.id,
+            message: message.content,
+            timestamp: formatter.string(from: message.createdAt ?? Date()),
             status: "Message saved successfully"
         )
     }
     
-    // NEW: GET endpoint to retrieve the last message
-    app.get("message") { req async -> MessageResponse in
+    // GET endpoint to retrieve the last message from database
+    app.get("message") { req async throws -> MessageResponse in
+        // Query the most recent message
+        guard let message = try await Message.query(on: req.db)
+            .sort(\.$createdAt, .descending)
+            .first() else {
+            throw Abort(.notFound, reason: "No messages found")
+        }
+        
+        // Format timestamp
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         formatter.timeZone = TimeZone(abbreviation: "UTC")
         
         return MessageResponse(
-            message: storage.lastMessage,
-            timestamp: formatter.string(from: storage.timestamp),
+            id: message.id,
+            message: message.content,
+            timestamp: formatter.string(from: message.createdAt ?? Date()),
             status: "success"
         )
     }
     
-    // NEW: GET endpoint to retrieve last message as plain text
-    app.get("message", "text") { req async -> String in
-        return storage.lastMessage
+    // GET endpoint to retrieve last message as plain text
+    app.get("message", "text") { req async throws -> String in
+        guard let message = try await Message.query(on: req.db)
+            .sort(\.$createdAt, .descending)
+            .first() else {
+            return "No messages yet"
+        }
+        
+        return message.content
     }
     
-    // NEW: DELETE endpoint to clear the message
-    app.delete("message") { req async -> [String: String] in
-        storage.lastMessage = "No messages yet"
-        storage.timestamp = Date()
-        return ["status": "Message cleared"]
+    // GET endpoint to retrieve all messages
+    app.get("messages") { req async throws -> [MessageResponse] in
+        let messages = try await Message.query(on: req.db)
+            .sort(\.$createdAt, .descending)
+            .all()
+        
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        formatter.timeZone = TimeZone(abbreviation: "UTC")
+        
+        return messages.map { message in
+            MessageResponse(
+                id: message.id,
+                message: message.content,
+                timestamp: formatter.string(from: message.createdAt ?? Date()),
+                status: "success"
+            )
+        }
+    }
+    
+    // GET endpoint to retrieve a specific message by ID
+    app.get("message", ":messageID") { req async throws -> MessageResponse in
+        guard let messageID = req.parameters.get("messageID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid message ID")
+        }
+        
+        guard let message = try await Message.find(messageID, on: req.db) else {
+            throw Abort(.notFound, reason: "Message not found")
+        }
+        
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        formatter.timeZone = TimeZone(abbreviation: "UTC")
+        
+        return MessageResponse(
+            id: message.id,
+            message: message.content,
+            timestamp: formatter.string(from: message.createdAt ?? Date()),
+            status: "success"
+        )
+    }
+    
+    // DELETE endpoint to delete all messages
+    app.delete("messages") { req async throws -> [String: String] in
+        try await Message.query(on: req.db).delete()
+        return ["status": "All messages deleted"]
+    }
+    
+    // DELETE endpoint to delete a specific message
+    app.delete("message", ":messageID") { req async throws -> [String: String] in
+        guard let messageID = req.parameters.get("messageID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid message ID")
+        }
+        
+        guard let message = try await Message.find(messageID, on: req.db) else {
+            throw Abort(.notFound, reason: "Message not found")
+        }
+        
+        try await message.delete(on: req.db)
+        return ["status": "Message deleted", "id": messageID.uuidString]
+    }
+    
+    // Health check endpoint for database
+    app.get("health") { req async throws -> [String: String] in
+        // Try to connect to database
+        _ = try await Message.query(on: req.db).count()
+        return ["status": "healthy", "database": "connected"]
     }
 }
