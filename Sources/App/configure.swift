@@ -1,5 +1,6 @@
 import Fluent
 import FluentPostgresDriver
+import NIOSSL
 import Vapor
 import VaporAPNS
 
@@ -26,17 +27,27 @@ private func configureRailwayPort(_ app: Application) {
 
 private func configureDatabase(_ app: Application) throws {
     if let databaseURL = Environment.get("DATABASE_URL") {
-        // Parse DATABASE_URL for Railway PostgreSQL
-        try app.databases.use(.postgres(url: databaseURL), as: .psql)
+        // Parse DATABASE_URL and handle Railway's SSL requirements
+        var postgresConfig = try SQLPostgresConfiguration(url: databaseURL)
+        
+        // Configure SSL for Railway PostgreSQL
+        var tlsConfig = TLSConfiguration.makeClientConfiguration()
+        tlsConfig.certificateVerification = .none // Railway uses self-signed certs
+        postgresConfig.coreConfiguration.tls = .require(try NIOSSLContext(configuration: tlsConfig))
+        
+        app.databases.use(.postgres(configuration: postgresConfig), as: .psql)
     } else {
-        // Local development fallback
-        app.databases.use(.postgres(
+        // Local development fallback - using the new non-deprecated method
+        let postgresConfig = SQLPostgresConfiguration(
             hostname: Environment.get("DATABASE_HOST") ?? "localhost",
-            port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:)) ?? PostgresConfiguration.ianaPortNumber,
+            port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:)) ?? SQLPostgresConfiguration.ianaPortNumber,
             username: Environment.get("DATABASE_USERNAME") ?? "vapor",
             password: Environment.get("DATABASE_PASSWORD") ?? "vapor",
-            database: Environment.get("DATABASE_NAME") ?? "vapor"
-        ), as: .psql)
+            database: Environment.get("DATABASE_NAME") ?? "vapor",
+            tls: .disable
+        )
+        
+        app.databases.use(.postgres(configuration: postgresConfig), as: .psql)
     }
 }
 
